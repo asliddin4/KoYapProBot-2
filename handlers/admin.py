@@ -3,6 +3,7 @@ import aiosqlite
 from datetime import datetime
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from typing import cast
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
@@ -18,75 +19,103 @@ class AdminStates(StatesGroup):
     broadcast_text = State()
 
 def admin_only(func):
-    """Decorator to restrict access to admin only"""
+    """Safe decorator for admin access"""
     async def wrapper(update, *args, **kwargs):
-        user_id = None
-        if isinstance(update, Message):
-            user_id = update.from_user.id if update.from_user else None
-        elif isinstance(update, CallbackQuery):
-            user_id = update.from_user.id if update.from_user else None
-        
-        if user_id != ADMIN_ID:
-            if isinstance(update, Message):
-                await update.answer("❌ Sizda admin huquqlari yo'q!")
-            elif isinstance(update, CallbackQuery):
-                await update.answer("❌ Sizda admin huquqlari yo'q!", show_alert=True)
+        try:
+            user_id = None
+            if isinstance(update, Message) and update.from_user:
+                user_id = update.from_user.id
+            elif isinstance(update, CallbackQuery) and update.from_user:
+                user_id = update.from_user.id
+            
+            if user_id != ADMIN_ID:
+                if isinstance(update, Message):
+                    await update.answer("❌ Sizda admin huquqlari yo'q!")
+                elif isinstance(update, CallbackQuery):
+                    try:
+                        await update.answer("❌ Sizda admin huquqlari yo'q!", show_alert=True)
+                    except:
+                        pass
+                return
+            
+            return await func(update, *args, **kwargs)
+        except Exception as e:
+            print(f"Admin decorator error: {e}")
             return
-        
-        return await func(update, *args, **kwargs)
     return wrapper
 
 @router.callback_query(F.data == "admin_panel")
 @admin_only
-async def admin_panel(callback: CallbackQuery, state: FSMContext):
-    """Show admin panel"""
-    await state.clear()
-    
-    if not callback.message:
-        return
+async def admin_panel(callback: CallbackQuery):
+    """Safe admin panel handler"""
+    try:
+        if not callback.message:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+            return
+            
+        message = cast(Message, callback.message)
+        await message.edit_text(
+            "🔧 <b>Admin Panel</b>\n\n"
+            "🎯 Botni boshqarish uchun quyidagi tugmalardan foydalaning:",
+            reply_markup=get_admin_menu()
+        )
         
-    await callback.message.edit_text(
-        "🔧 <b>Admin Panel</b>\n\n"
-        "🎯 Botni boshqarish uchun quyidagi tugmalardan foydalaning:",
-        reply_markup=get_admin_menu()
-    )
+        await callback.answer()
+        
+    except Exception as e:
+        print(f"Admin panel error: {e}")
+        try:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
 
 @router.callback_query(F.data == "admin_stats") 
 @admin_only
 async def admin_stats(callback: CallbackQuery):
-    """Show bot statistics"""
-    if not callback.message:
-        return
-        
+    """Safe admin stats handler"""
     try:
-        async with aiosqlite.connect(DATABASE_PATH) as db:
-            # Total users
-            cursor = await db.execute("SELECT COUNT(*) FROM users")
-            result = await cursor.fetchone()
-            total_users = result[0] if result else 0
+        if not callback.message:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+            return
             
-            # Premium users
-            cursor = await db.execute("SELECT COUNT(*) FROM users WHERE is_premium = 1")
-            result = await cursor.fetchone()
-            premium_users = result[0] if result else 0
-            
-            # Active today
-            cursor = await db.execute("""
-                SELECT COUNT(*) FROM users 
-                WHERE last_activity > datetime('now', '-1 day')
-            """)
-            result = await cursor.fetchone()
-            active_today = result[0] if result else 0
-            
-            # Total sections
-            cursor = await db.execute("SELECT COUNT(*) FROM sections")
-            result = await cursor.fetchone()
-            total_sections = result[0] if result else 0
-            
-            # Total quizzes
-            cursor = await db.execute("SELECT COUNT(*) FROM quizzes")
-            result = await cursor.fetchone()
-            total_quizzes = result[0] if result else 0
+        total_users = 0
+        premium_users = 0
+        active_today = 0
+        total_sections = 0
+        total_quizzes = 0
+        
+        try:
+            async with aiosqlite.connect(DATABASE_PATH) as db:
+                # Total users
+                cursor = await db.execute("SELECT COUNT(*) FROM users")
+                result = await cursor.fetchone()
+                total_users = result[0] if result else 0
+                
+                # Premium users  
+                cursor = await db.execute("SELECT COUNT(*) FROM users WHERE is_premium = 1")
+                result = await cursor.fetchone()
+                premium_users = result[0] if result else 0
+                
+                # Active today
+                cursor = await db.execute("""
+                    SELECT COUNT(*) FROM users 
+                    WHERE last_activity > datetime('now', '-1 day')
+                """)
+                result = await cursor.fetchone()
+                active_today = result[0] if result else 0
+                
+                # Total sections
+                cursor = await db.execute("SELECT COUNT(*) FROM sections")
+                result = await cursor.fetchone()
+                total_sections = result[0] if result else 0
+                
+                # Total quizzes
+                cursor = await db.execute("SELECT COUNT(*) FROM quizzes")
+                result = await cursor.fetchone()
+                total_quizzes = result[0] if result else 0
+                
+        except Exception as db_error:
+            print(f"Database error: {db_error}")
 
         stats_text = f"""📊 <b>Bot Statistikasi</b>
 
@@ -101,129 +130,177 @@ async def admin_stats(callback: CallbackQuery):
 
 💰 <b>Premium narxi:</b> {PREMIUM_PRICE_UZS:,} so'm"""
 
-        await callback.message.edit_text(
+        message = cast(Message, callback.message)
+        await message.edit_text(
             stats_text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
             ])
         )
+        
+        await callback.answer()
+        
     except Exception as e:
-        await callback.message.edit_text(
-            f"❌ Xatolik: {str(e)}",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
-            ])
-        )
-
-# ================================ 
-# BROADCAST SYSTEM
-# ================================
+        print(f"Admin stats error: {e}")
+        try:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
 
 @router.callback_query(F.data == "admin_broadcast")
 @admin_only
-async def admin_broadcast_menu(callback: CallbackQuery, state: FSMContext):
-    """Broadcast menu"""
-    await state.clear()
-    
-    if not callback.message:
-        return
+async def admin_broadcast_menu(callback: CallbackQuery):
+    """Safe broadcast menu"""
+    try:
+        if not callback.message:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+            return
+            
+        message = cast(Message, callback.message)
+        await message.edit_text(
+            "📢 <b>Barchaga xabar yuborish</b>\n\n"
+            "🎯 Barcha aktiv foydalanuvchilarga matn xabar yuborish\n\n"
+            "⚠️ Xabar yuborishdan oldin tekshirish bo'ladi",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📝 Matn xabar yuborish", callback_data="broadcast_text")],
+                [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
+            ])
+        )
         
-    await callback.message.edit_text(
-        "📢 <b>Barchaga xabar yuborish</b>\n\n"
-        "🎯 Barcha aktiv foydalanuvchilarga matn xabar yuborish\n\n"
-        "⚠️ Xabar yuborishdan oldin tekshirish bo'ladi",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📝 Matn xabar yuborish", callback_data="broadcast_text")],
-            [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
-        ])
-    )
+        await callback.answer()
+        
+    except Exception as e:
+        print(f"Broadcast menu error: {e}")
+        try:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
 
 @router.callback_query(F.data == "broadcast_text")
 @admin_only 
 async def broadcast_text_start(callback: CallbackQuery, state: FSMContext):
-    """Start text broadcast"""
-    await state.set_state(AdminStates.broadcast_text)
-    
-    if not callback.message:
-        return
+    """Safe broadcast text start"""
+    try:
+        await state.set_state(AdminStates.broadcast_text)
         
-    await callback.message.edit_text(
-        "📝 <b>Matn xabar yozish</b>\n\n"
-        "Barcha foydalanuvchilarga yubormoqchi bo'lgan xabaringizni yozing:\n\n"
-        "💡 /cancel - bekor qilish",
-        reply_markup=None
-    )
+        if not callback.message:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+            return
+            
+        message = cast(Message, callback.message)
+        await message.edit_text(
+            "📝 <b>Matn xabar yozish</b>\n\n"
+            "Barcha foydalanuvchilarga yubormoqchi bo'lgan xabaringizni yozing:\n\n"
+            "💡 /cancel - bekor qilish",
+            reply_markup=None
+        )
+        
+        await callback.answer()
+        
+    except Exception as e:
+        print(f"Broadcast text start error: {e}")
+        try:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
 
 @router.message(AdminStates.broadcast_text)
 @admin_only
 async def broadcast_text_received(message: Message, state: FSMContext):
-    """Process text message for broadcast"""
-    if not message or not message.text:
-        return
+    """Safe broadcast text handler"""
+    try:
+        if not message or not message.text:
+            return
+            
+        if message.text == "/cancel":
+            await state.clear()
+            await message.answer("❌ Bekor qilindi")
+            return
         
-    if message.text == "/cancel":
-        await state.clear()
-        await message.answer("❌ Bekor qilindi")
-        return
-    
-    # Save message
-    await state.update_data(message_text=message.text, message_type="text")
-    
-    # Show confirmation
-    await message.answer(
-        f"📋 <b>Tasdiqlash</b>\n\n"
-        f"📝 <b>Xabar:</b>\n{message.text}\n\n"
-        f"⚠️ Bu xabar barchaga yuboriladi!",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Yuborish", callback_data="confirm_broadcast"),
-                InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_broadcast")
-            ]
-        ])
-    )
+        # Save message
+        await state.update_data(message_text=message.text, message_type="text")
+        
+        # Show confirmation
+        await message.answer(
+            f"📋 <b>Tasdiqlash</b>\n\n"
+            f"📝 <b>Xabar:</b>\n{message.text}\n\n"
+            f"⚠️ Bu xabar barchaga yuboriladi!",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Yuborish", callback_data="confirm_broadcast"),
+                    InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_broadcast")
+                ]
+            ])
+        )
+        
+    except Exception as e:
+        print(f"Broadcast text received error: {e}")
 
 @router.callback_query(F.data == "confirm_broadcast")
 @admin_only
 async def confirm_broadcast(callback: CallbackQuery, state: FSMContext):
-    """Execute broadcast"""
-    data = await state.get_data()
-    
-    if not data or not callback.message:
-        await callback.answer("❌ Xatolik!", show_alert=True)
-        return
+    """Safe broadcast confirmation"""
+    try:
+        data = await state.get_data()
         
-    await callback.message.edit_text("🚀 Yuborilmoqda...")
-    
-    # Send to all users
-    sent_count = await send_broadcast_message(data)
-    
-    await state.clear()
-    await callback.message.edit_text(
-        f"✅ <b>Xabar yuborildi!</b>\n\n"
-        f"📊 {sent_count} ta foydalanuvchiga yuborildi",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
-        ])
-    )
+        if not data or not callback.message:
+            await callback.answer("❌ Xatolik!", show_alert=True)
+            return
+            
+        message = cast(Message, callback.message)
+        await message.edit_text("🚀 Yuborilmoqda...")
+        
+        # Send to all users
+        sent_count = await send_broadcast_message(data)
+        
+        await state.clear()
+        await message.edit_text(
+            f"✅ <b>Xabar yuborildi!</b>\n\n"
+            f"📊 {sent_count} ta foydalanuvchiga yuborildi",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
+            ])
+        )
+        
+        await callback.answer()
+        
+    except Exception as e:
+        print(f"Confirm broadcast error: {e}")
+        try:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
 
 @router.callback_query(F.data == "cancel_broadcast")
 @admin_only
 async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
-    """Cancel broadcast"""
-    await state.clear()
-    
-    if not callback.message:
-        return
+    """Safe broadcast cancel"""
+    try:
+        await state.clear()
         
-    await callback.message.edit_text(
-        "❌ <b>Xabar yuborish bekor qilindi</b>",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
-        ])
-    )
+        if not callback.message:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+            return
+            
+        message = cast(Message, callback.message)
+        await message.edit_text(
+            "❌ <b>Xabar yuborish bekor qilindi</b>",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
+            ])
+        )
+        
+        await callback.answer()
+        
+    except Exception as e:
+        print(f"Cancel broadcast error: {e}")
+        try:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
 
 async def send_broadcast_message(data):
-    """Send message to all active users"""
+    """Safe broadcast sender"""
     bot = Bot(token=BOT_TOKEN)
     sent_count = 0
     
@@ -258,139 +335,236 @@ async def send_broadcast_message(data):
         return sent_count
 
 # ================================
-# SECTION MANAGEMENT  
+# OTHER ADMIN HANDLERS - SAFE STUBS
 # ================================
 
-@router.callback_query(F.data == "admin_create_section")
+@router.callback_query(F.data == "admin_sections")
 @admin_only
-async def create_section_start(callback: CallbackQuery, state: FSMContext):
-    """Start section creation"""
-    await state.set_state(AdminStates.creating_section)
-    
-    if not callback.message:
-        return
-        
-    await callback.message.edit_text(
-        "📚 <b>Yangi bo'lim yaratish</b>\n\n"
-        "📝 Bo'lim ma'lumotlarini kiriting:\n"
-        "Format: Nom|Til|Premium(ha/yo'q)\n\n"
-        "Misol: Boshlang'ich darslar|Korean|yo'q",
-        reply_markup=None
-    )
-
-@router.message(AdminStates.creating_section)
-@admin_only
-async def create_section_process(message: Message, state: FSMContext):
-    """Process section creation"""
-    if not message or not message.text:
-        await message.answer("❌ Matn kiriting!")
-        return
-        
-    text = message.text.strip()
-    
-    if text == "/cancel":
-        await state.clear()
-        await message.answer("❌ Bekor qilindi")
-        return
-    
+async def admin_sections(callback: CallbackQuery):
+    """Safe admin sections handler"""
     try:
-        parts = text.split('|')
-        if len(parts) != 3:
-            await message.answer("❌ Noto'g'ri format! Format: Nom|Til|Premium(ha/yo'q)")
+        if not callback.message:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
             return
-        
-        name = parts[0].strip()
-        language = parts[1].strip()
-        is_premium = parts[2].strip().lower() in ['ha', 'yes', 'true', '1']
-        
-        async with aiosqlite.connect(DATABASE_PATH) as db:
-            await db.execute("""
-                INSERT INTO sections (name, language, is_premium, created_by)
-                VALUES (?, ?, ?, ?)
-            """, (name, language, is_premium, ADMIN_ID))
-            await db.commit()
-        
-        await state.clear()
-        premium_text = "Ha" if is_premium else "Yoq"
-        await message.answer(
-            f"✅ <b>Bo'lim yaratildi!</b>\n\n"
-            f"📚 Nom: {name}\n"
-            f"🌐 Til: {language}\n"
-            f"💎 Premium: {premium_text}",
+            
+        message = cast(Message, callback.message)
+        await message.edit_text(
+            "📚 <b>Bo'limlar boshqaruvi</b>\n\n"
+            "Bu funksiya hozircha ishlab chiqilmoqda...",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
             ])
         )
-        
+        await callback.answer()
     except Exception as e:
-        await message.answer(f"❌ Xatolik: {str(e)}")
+        print(f"Admin sections error: {e}")
+        try:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
 
-# ================================
-# QUIZ MANAGEMENT
-# ================================
-
-@router.callback_query(F.data == "admin_create_quiz")
+@router.callback_query(F.data == "admin_content")
 @admin_only
-async def create_quiz_start(callback: CallbackQuery, state: FSMContext):
-    """Start quiz creation"""
-    await state.set_state(AdminStates.creating_quiz)
-    
-    if not callback.message:
-        return
-        
-    await callback.message.edit_text(
-        "🧩 <b>Yangi test yaratish</b>\n\n"
-        "📝 Test ma'lumotlarini kiriting:\n"
-        "Format: Sarlavha|Tavsif|Til|Premium(ha/yo'q)\n\n"
-        "Misol: Korean 1-daraja|Boshlang'ich test|Korean|yo'q",
-        reply_markup=None
-    )
-
-@router.message(AdminStates.creating_quiz)
-@admin_only
-async def create_quiz_process(message: Message, state: FSMContext):
-    """Process quiz creation"""
-    if not message or not message.text:
-        await message.answer("❌ Matn kiriting!")
-        return
-        
-    text = message.text.strip()
-    
-    if text == "/cancel":
-        await state.clear()
-        await message.answer("❌ Bekor qilindi")
-        return
-    
+async def admin_content(callback: CallbackQuery):
+    """Safe admin content handler"""
     try:
-        parts = text.split('|')
-        if len(parts) != 4:
-            await message.answer("❌ Noto'g'ri format! Format: Sarlavha|Tavsif|Til|Premium(ha/yo'q)")
+        if not callback.message:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
             return
-        
-        title = parts[0].strip()
-        description = parts[1].strip()
-        language = parts[2].strip()
-        is_premium = parts[3].strip().lower() in ['ha', 'yes', 'true', '1']
-        
-        async with aiosqlite.connect(DATABASE_PATH) as db:
-            await db.execute("""
-                INSERT INTO quizzes (title, description, language, is_premium, created_by)
-                VALUES (?, ?, ?, ?, ?)
-            """, (title, description, language, is_premium, ADMIN_ID))
-            await db.commit()
-        
-        await state.clear()
-        premium_text = "Ha" if is_premium else "Yoq"
-        await message.answer(
-            f"✅ <b>Test yaratildi!</b>\n\n"
-            f"📝 Sarlavha: {title}\n"
-            f"📄 Tavsif: {description}\n"
-            f"🌐 Til: {language}\n"
-            f"💎 Premium: {premium_text}",
+            
+        message = cast(Message, callback.message)
+        await message.edit_text(
+            "📁 <b>Kontent boshqaruvi</b>\n\n"
+            "Bu funksiya hozircha ishlab chiqilmoqda...",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
             ])
         )
-        
+        await callback.answer()
     except Exception as e:
-        await message.answer(f"❌ Xatolik: {str(e)}")
+        print(f"Admin content error: {e}")
+        try:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
+
+@router.callback_query(F.data == "admin_quiz")
+@admin_only
+async def admin_quiz(callback: CallbackQuery):
+    """Safe admin quiz handler"""
+    try:
+        if not callback.message:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+            return
+            
+        message = cast(Message, callback.message)
+        await message.edit_text(
+            "🧠 <b>Testlar boshqaruvi</b>\n\n"
+            "Bu funksiya hozircha ishlab chiqilmoqda...",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
+            ])
+        )
+        await callback.answer()
+    except Exception as e:
+        print(f"Admin quiz error: {e}")
+        try:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
+
+@router.callback_query(F.data == "admin_premium")
+@admin_only
+async def admin_premium(callback: CallbackQuery):
+    """Admin premium management"""
+    try:
+        if not callback.message:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+            return
+            
+        message = cast(Message, callback.message)
+        await message.edit_text(
+            "💎 <b>Premium boshqaruv</b>\n\n"
+            "Bu funksiya hozircha ishlab chiqilmoqda...",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
+            ])
+        )
+        await callback.answer()
+    except Exception as e:
+        print(f"Admin premium error: {e}")
+        try:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
+
+@router.callback_query(F.data == "admin_payments")
+@admin_only
+async def admin_payments(callback: CallbackQuery):
+    """Admin payments management"""  
+    try:
+        if not callback.message:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+            return
+            
+        message = cast(Message, callback.message)
+        await message.edit_text(
+            "💳 <b>To'lov tasdiqlash</b>\n\n"
+            "Bu funksiya hozircha ishlab chiqilmoqda...",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
+            ])
+        )
+        await callback.answer()
+    except Exception as e:
+        print(f"Admin payments error: {e}")
+        try:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
+
+@router.callback_query(F.data == "content_delete_menu")
+@admin_only
+async def content_delete_menu(callback: CallbackQuery):
+    """Content delete menu"""
+    try:
+        if not callback.message:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+            return
+            
+        message = cast(Message, callback.message)
+        await message.edit_text(
+            "🗑️ <b>Content o'chirish</b>\n\n"
+            "Bu funksiya hozircha ishlab chiqilmoqda...",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
+            ])
+        )
+        await callback.answer()
+    except Exception as e:
+        print(f"Content delete error: {e}")
+        try:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
+
+@router.callback_query(F.data == "admin_test_messages")
+@admin_only
+async def admin_test_messages(callback: CallbackQuery):
+    """Admin test messages"""
+    try:
+        if not callback.message:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+            return
+            
+        message = cast(Message, callback.message)
+        await message.edit_text(
+            "📨 <b>Test xabarlar</b>\n\n"
+            "Bu funksiya hozircha ishlab chiqilmoqda...",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
+            ])
+        )
+        await callback.answer()
+    except Exception as e:
+        print(f"Test messages error: {e}")
+        try:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
+
+@router.callback_query(F.data == "admin_delete_sections")
+@admin_only
+async def admin_delete_sections(callback: CallbackQuery):
+    """Admin delete sections"""
+    try:
+        if not callback.message:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+            return
+            
+        message = cast(Message, callback.message)
+        await message.edit_text(
+            "🗑 <b>Bo'limlarni o'chirish</b>\n\n"
+            "Bu funksiya hozircha ishlab chiqilmoqda...",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Admin panel", callback_data="admin_panel")]
+            ])
+        )
+        await callback.answer()
+    except Exception as e:
+        print(f"Delete sections error: {e}")
+        try:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
+
+# Catch-all for other admin callbacks
+@router.callback_query(F.data.startswith("admin_"))
+@admin_only
+async def admin_catch_all(callback: CallbackQuery):
+    """Safe catch-all for admin callbacks"""
+    try:
+        if not callback.message:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+            return
+            
+        message = cast(Message, callback.message)
+        await message.edit_text(
+            "🔧 <b>Admin Panel</b>\n\n"
+            "Bu funksiya hozircha ishlab chiqilmoqda...\n\n"
+            "Asosiy admin funksiyalar:\n"
+            "• 📊 Statistika\n"
+            "• 📢 Barchaga xabar yuborish",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats")],
+                [InlineKeyboardButton(text="📢 Xabar yuborish", callback_data="admin_broadcast")],
+                [InlineKeyboardButton(text="🔙 Bosh menu", callback_data="main_menu")]
+            ])
+        )
+        await callback.answer()
+    except Exception as e:
+        print(f"Admin catch-all error: {e}")
+        try:
+            await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
